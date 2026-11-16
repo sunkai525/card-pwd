@@ -263,16 +263,24 @@ export interface AnnouncementInput {
 
 const ANNOUNCEMENT_ORDER = 'ORDER BY pinned DESC, COALESCE(starts_at, created_at) DESC'
 
-/** 对外可见：生效时间内且未失效 */
-export async function listPublicAnnouncements(db: DB, limit = 50): Promise<Announcement[]> {
+/** 对外可见：生效时间内且未失效，可按类型过滤 */
+export async function listPublicAnnouncements(
+  db: DB,
+  limit = 50,
+  type?: AnnouncementType,
+): Promise<Announcement[]> {
   const t = Date.now()
+  const typeFilter = type ? ' AND type = ?' : ''
+  const params: (string | number)[] = [t, t]
+  if (type) params.push(type)
+  params.push(limit)
   const result = await db
     .prepare(
       `SELECT * FROM announcements
-       WHERE (starts_at IS NULL OR starts_at <= ?) AND (ends_at IS NULL OR ends_at >= ?)
+       WHERE (starts_at IS NULL OR starts_at <= ?) AND (ends_at IS NULL OR ends_at >= ?)${typeFilter}
        ${ANNOUNCEMENT_ORDER} LIMIT ?`,
     )
-    .bind(t, t, limit)
+    .bind(...params)
     .all<Announcement>()
   return result.results as Announcement[]
 }

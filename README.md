@@ -64,7 +64,7 @@ npm run cf-typegen
 
 ## API
 
-基础地址为站点根路径（如 `http://localhost:8787`），请求与响应均为 JSON。响应中的时间均为 **Unix 毫秒**；公告请求中的时间字段接受 ISO 8601 字符串。管理接口需请求头 `Authorization: Bearer <ADMIN_TOKEN>`，对外接口无需鉴权。应用内的 `/docs` 页面提供同样的速查文档。
+请求与响应均为 JSON。响应中的时间均为 **Unix 毫秒**；公告请求中的时间字段接受 ISO 8601 字符串。管理接口需请求头 `Authorization: Bearer <ADMIN_TOKEN>`，对外接口无需鉴权。应用内的 `/docs` 页面提供同样的速查文档。
 
 ### 对外接口（无需鉴权）
 
@@ -96,6 +96,8 @@ npm run cf-typegen
 #### GET /api/announcements — 当前生效公告
 
 只返回生效期内（`starts_at` 已到且 `ends_at` 未到）的公告，按「置顶 → 生效/创建时间倒序」排列。`starts_at` 为 `null` 表示立即生效，`ends_at` 为 `null` 表示长期有效。
+
+支持 `type` 查询参数按类型过滤，可选值 `normal` / `client_update` / `site_config`；省略或值非法时返回全部类型。例如 `GET /api/announcements?type=client_update` 只返回客户端版本更新公告。
 
 ```json
 { "items": [
@@ -171,6 +173,9 @@ curl -X DELETE http://localhost:8787/api/admin/keys \
 curl -X POST http://localhost:8787/api/admin/announcements \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"title":"客户端 v2.1","content":"请升级","type":"client_update","download_url":"https://example.com/app.exe","pinned":true}'
+
+# 按类型拉取当前生效公告（无需鉴权）
+curl "http://localhost:8787/api/announcements?type=client_update"
 ```
 
 ## 管理页面

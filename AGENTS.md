@@ -30,6 +30,7 @@ Cloudflare Worker (Hono) 卡密/公告管理系统。Worker 入口 `src/index.ts
 - Hono JSX：`rows`/`colspan` 等必须是数字（`rows={6}`）；内联 `<script>` 要用 `dangerouslySetInnerHTML`，否则 `>`、`&` 会被 HTML 转义破坏 JS。
 - `src/verify.ts` 中设备绑定用单条原子 SQL（`INSERT ... SELECT ... WHERE ... ON CONFLICT`，封装在 `store.bindDevice`）保证并发下不突破 `max_devices`；不要退回到"先查数量再插入"。
 - 公告时间：DB 存 Unix 毫秒，API 收 ISO 8601；表单 `datetime-local` 按 UTC 解读并在标签中标注。`type` 仅 `normal` / `client_update` / `site_config`，`download_url` 仅 http/https。
+- 公开公告 `GET /api/announcements` 支持 `?type=normal|client_update|site_config` 按类型过滤：过滤在 `store.listPublicAnnouncements(db, limit, type?)` 中通过追加 `AND type = ?` 实现；非法 type 视为不过滤（与 `/api/admin/keys` 的 `status` 参数行为一致），无参数时行为不变。
 - 接口或字段变动时同步更新 `README.md` 的 API 章节和应用内 `/docs` 页面（`src/pages.tsx` 的 `DocsPage`）。
 
 ## 部署

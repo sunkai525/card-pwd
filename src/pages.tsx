@@ -771,7 +771,6 @@ export function DocsPage() {
         <h2>概览</h2>
         <table>
           <tbody>
-            <tr><th>基础地址</th><td class="mono">当前站点根路径，例如 http://localhost:8787</td></tr>
             <tr><th>数据格式</th><td>请求与响应均为 JSON（<code>Content-Type: application/json</code>）</td></tr>
             <tr><th>鉴权</th><td>管理接口需请求头 <code>Authorization: Bearer &lt;管理Token&gt;</code>；对外接口无需鉴权</td></tr>
             <tr><th>时间戳</th><td>响应中的时间均为 Unix 毫秒；公告请求中的时间字段接受 ISO 8601 字符串</td></tr>
@@ -840,7 +839,12 @@ export function DocsPage() {
         </pre>
         <p class="muted">
           仅返回生效期内（<code>starts_at</code> 已到且 <code>ends_at</code> 未到）的公告，按「置顶 → 生效/创建时间倒序」排列。
+          支持 <code>?type=normal|client_update|site_config</code> 按类型过滤；省略或类型非法时返回全部类型。
         </p>
+        <pre>
+{`# 只获取客户端版本更新公告
+curl "http://localhost:8787/api/announcements?type=client_update"`}
+        </pre>
       </section>
 
       <section class="panel">

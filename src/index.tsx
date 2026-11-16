@@ -151,7 +151,9 @@ app.post('/api/verify', async (c) => {
 
 // 对外公告 API（无需鉴权，仅返回生效期内的公告）
 app.get('/api/announcements', async (c) => {
-  return c.json({ items: await store.listPublicAnnouncements(c.env.DB) })
+  // 非法 type 视为不过滤，与 /api/admin/keys 的 status 参数行为一致
+  const type = parseAnnouncementType(c.req.query('type')) ?? undefined
+  return c.json({ items: await store.listPublicAnnouncements(c.env.DB, 50, type) })
 })
 
 // ---------------------------------------------------------------------------
