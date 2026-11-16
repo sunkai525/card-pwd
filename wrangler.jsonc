@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "card-pwd",
+  "compatibility_date": "2026-11-10",
+  "main": "./src/index.tsx",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "card-pwd-db",
+      "database_id": "9a4b4c9f-a874-4d73-80fd-947f4d619ea3",
+      "migrations_dir": "./migrations"
+    }
+  ]
+}

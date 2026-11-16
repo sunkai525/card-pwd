@@ -1,0 +1,25 @@
+{
+  "name": "card-pwd",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "$npm_execpath run build && vite preview",
+    "deploy": "$npm_execpath run build && wrangler deploy",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings"
+  },
+  "dependencies": {
+    "hono": "^4.13.16"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.44.0",
+    "vite": "^8.1.4",
+    "vite-ssr-components": "^0.8.0",
+    "wrangler": "^4.110.0"
+  },
+  "allowScripts": {
+    "workerd@1.20261110.1": true,
+    "workerd@1.20261116.1": true,
+    "esbuild@0.28.2": true
+  }
+}
