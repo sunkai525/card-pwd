@@ -50,6 +50,16 @@ export interface Announcement {
   updated_at: number
 }
 
+export interface SiteConfig {
+  id: number
+  title: string
+  version: string
+  file_url: string | null
+  description: string
+  created_at: number
+  updated_at: number
+}
+
 export interface Stats {
   total: number
   unused: number

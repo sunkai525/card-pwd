@@ -1,5 +1,5 @@
 import type { Child } from 'hono/jsx'
-import type { Announcement, CardKey, CardStatus, DeviceBinding, Stats, VerifyLog } from './types'
+import type { Announcement, CardKey, CardStatus, DeviceBinding, SiteConfig, Stats, VerifyLog } from './types'
 import {
   ANNOUNCEMENT_TYPES,
   announcementTypeLabel,
@@ -19,8 +19,8 @@ function AdminShell({ title, children }: { title: string; children?: Child }) {
         <nav>
           <a href="/">概览</a>
           <a href="/keys">卡密列表</a>
-          <a href="/keys/new">新增/导入</a>
           <a href="/admin/announcements">公告管理</a>
+          <a href="/admin/site-configs">站点配置</a>
           <a href="/docs">API 文档</a>
           <form method="post" action="/logout" class="inline">
             <button type="submit" class="link-button">
@@ -191,6 +191,7 @@ export function KeysPage({
     params.set('page', String(p))
     return `/keys?${params.toString()}`
   }
+  const returnTo = link(page)
   return (
     <AdminShell title="卡密列表">
       <div class="toolbar">
@@ -211,59 +212,67 @@ export function KeysPage({
       </div>
       {message && <p class="ok">{message}</p>}
       <p class="muted">共 {total} 条</p>
-      <form method="post" action="/keys/batch-delete">
+      <form id="batch-delete-form" method="post" action="/keys/batch-delete">
         <div class="batch-bar">
           <button type="submit" class="danger">
             批量删除选中项
           </button>
           <span class="muted">勾选需要删除的卡密</span>
         </div>
-        <div class="panel">
-          <table>
-            <thead>
-              <tr>
-                <th title="全选本页">
-                  <input type="checkbox" id="select-all" />
-                </th>
-                <th>ID</th>
-                <th>卡密</th>
-                <th>状态</th>
-                <th>有效期</th>
-                <th>设备</th>
-                <th>备注</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((card) => (
-                <tr>
-                  <td>
-                    <input type="checkbox" class="row-check" name="ids" value={card.id} />
-                  </td>
-                  <td>#{card.id}</td>
-                  <td class="mono">{card.key}</td>
-                  <td>
-                    <span class={`badge b-${card.status}`}>{displayStatus(card.status)}</span>
-                  </td>
-                  <td>{card.activated_at ? `${remainingDays(card.expires_at)} 天` : `${card.valid_days} 天(未激活)`}</td>
-                  <td>{card.activated_at ? '已绑定' : '—'}</td>
-                  <td>{card.note ?? ''}</td>
-                  <td>
-                    <a href={`/keys/${card.id}`}>详情</a>
-                  </td>
-                </tr>
-              ))}
-              {items.length === 0 && (
-                <tr>
-                  <td colspan={8} class="muted center">
-                    暂无数据
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
       </form>
+      <div class="panel">
+        <table>
+          <thead>
+            <tr>
+              <th title="全选本页">
+                <input type="checkbox" id="select-all" />
+              </th>
+              <th>ID</th>
+              <th>卡密</th>
+              <th>状态</th>
+              <th>有效期</th>
+              <th>设备</th>
+              <th>备注</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((card) => (
+              <tr>
+                <td>
+                  <input type="checkbox" class="row-check" name="ids" value={card.id} form="batch-delete-form" />
+                </td>
+                <td>#{card.id}</td>
+                <td class="mono">{card.key}</td>
+                <td>
+                  <span class={`badge b-${card.status}`}>{displayStatus(card.status)}</span>
+                </td>
+                <td>{card.activated_at ? `${remainingDays(card.expires_at)} 天` : `${card.valid_days} 天(未激活)`}</td>
+                <td>{card.activated_at ? '已绑定' : '—'}</td>
+                <td>
+                  <form method="post" action={`/keys/${card.id}/note`} class="note-form">
+                    <input name="note" value={card.note ?? ''} class="note-input" aria-label="备注" />
+                    <input type="hidden" name="next" value={returnTo} />
+                    <button type="submit" class="link-button">
+                      保存
+                    </button>
+                  </form>
+                </td>
+                <td>
+                  <a href={`/keys/${card.id}`}>详情</a>
+                </td>
+              </tr>
+            ))}
+            {items.length === 0 && (
+              <tr>
+                <td colspan={8} class="muted center">
+                  暂无数据
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
       <div class="pagination">
         {page > 1 && <a href={link(page - 1)}>上一页</a>}
         <span>
@@ -764,6 +773,177 @@ export function PublicAnnouncementsPage({ items }: { items: Announcement[] }) {
   )
 }
 
+function shortText(value: string | null, max = 60): string {
+  if (!value) return '—'
+  return value.length > max ? `${value.slice(0, max)}…` : value
+}
+
+export function SiteConfigsPage({ items }: { items: SiteConfig[] }) {
+  return (
+    <AdminShell title="站点配置">
+      <div class="toolbar">
+        <p class="muted">共 {items.length} 条配置，对外接口：/api/site-config（返回最新一条）</p>
+        <a class="button primary" href="/admin/site-configs/new">
+          新增配置
+        </a>
+      </div>
+      <div class="panel">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>标题</th>
+              <th>版本号</th>
+              <th>文件地址</th>
+              <th>描述</th>
+              <th>创建时间 (UTC)</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((cfg) => (
+              <tr>
+                <td>#{cfg.id}</td>
+                <td>{cfg.title}</td>
+                <td class="mono">{cfg.version}</td>
+                <td class="sm">
+                  {cfg.file_url ? (
+                    <a href={cfg.file_url} target="_blank" rel="noopener noreferrer">
+                      下载
+                    </a>
+                  ) : (
+                    '—'
+                  )}
+                </td>
+                <td class="sm" title={cfg.description}>
+                  {shortText(cfg.description)}
+                </td>
+                <td class="mono sm">{formatTime(cfg.created_at)}</td>
+                <td>
+                  <a href={`/admin/site-configs/${cfg.id}/edit`}>编辑</a>
+                  {' · '}
+                  <a href={`/admin/site-configs/${cfg.id}/delete`}>删除</a>
+                </td>
+              </tr>
+            ))}
+            {items.length === 0 && (
+              <tr>
+                <td colspan={7} class="muted center">
+                  暂无站点配置
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </AdminShell>
+  )
+}
+
+export function SiteConfigFormPage({ config, error }: { config?: SiteConfig; error?: string }) {
+  const editing = config != null
+  return (
+    <AdminShell title={editing ? `编辑站点配置 #${config!.id}` : '新增站点配置'}>
+      {error && <p class="error">{error}</p>}
+      <form
+        method="post"
+        action={editing ? `/admin/site-configs/${config!.id}/edit` : '/admin/site-configs/new'}
+        class="panel"
+      >
+        <label>
+          标题
+          <input name="title" value={config?.title ?? ''} required maxlength={200} />
+        </label>
+        <label>
+          版本号
+          <input name="version" value={config?.version ?? ''} required maxlength={100} placeholder="例如 1.2.0" />
+        </label>
+        <label>
+          文件地址（上传后自动填入，也可直接填写 http/https 地址）
+          <input type="hidden" name="file_url" id="sc-file-url" value={config?.file_url ?? ''} />
+          <input type="file" id="sc-file" />
+        </label>
+        <p>
+          <span id="sc-upload-status" class="muted sm"></span>{' '}
+          <a id="sc-file-link" href="#" target="_blank" rel="noopener noreferrer" class="sm"></a>
+        </p>
+        <label>
+          描述
+          <textarea name="description" rows={6}>
+            {config?.description ?? ''}
+          </textarea>
+        </label>
+        <button type="submit" class="primary">
+          {editing ? '保存修改' : '新增配置'}
+        </button>
+        <a class="button" href="/admin/site-configs">
+          取消
+        </a>
+      </form>
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `
+            const fileInput = document.getElementById('sc-file');
+            const urlInput = document.getElementById('sc-file-url');
+            const status = document.getElementById('sc-upload-status');
+            const link = document.getElementById('sc-file-link');
+            function showUrl() {
+              if (urlInput.value) {
+                link.href = urlInput.value;
+                link.textContent = urlInput.value;
+                link.style.display = '';
+              } else {
+                link.style.display = 'none';
+              }
+            }
+            showUrl();
+            fileInput.addEventListener('change', async () => {
+              const file = fileInput.files && fileInput.files[0];
+              if (!file) return;
+              status.textContent = '上传中…';
+              status.className = 'muted sm';
+              const data = new FormData();
+              data.append('file', file);
+              try {
+                const res = await fetch('/admin/site-configs/upload', { method: 'POST', body: data });
+                const body = await res.json();
+                if (!res.ok || !body.url) throw new Error(body.message || '上传失败');
+                urlInput.value = body.url;
+                showUrl();
+                status.textContent = '上传成功，已填入文件地址';
+                status.className = 'ok sm';
+              } catch (e) {
+                status.textContent = '上传失败：' + (e && e.message ? e.message : '未知错误');
+                status.className = 'error sm';
+              }
+            });
+          `,
+        }}
+      ></script>
+    </AdminShell>
+  )
+}
+
+export function SiteConfigDeleteConfirmPage({ config }: { config: SiteConfig }) {
+  return (
+    <AdminShell title="确认删除站点配置">
+      <div class="panel">
+        <p>
+          确定删除站点配置 <strong>{config.title}</strong>（版本 {config.version}）吗？此操作不可恢复。
+        </p>
+        <form method="post" action={`/admin/site-configs/${config.id}/delete`} class="inline">
+          <button type="submit" class="danger">
+            确认删除
+          </button>
+        </form>
+        <a class="button" href="/admin/site-configs">
+          取消
+        </a>
+      </div>
+    </AdminShell>
+  )
+}
+
 export function DocsPage() {
   return (
     <AdminShell title="API 文档">
@@ -772,7 +952,7 @@ export function DocsPage() {
         <table>
           <tbody>
             <tr><th>数据格式</th><td>请求与响应均为 JSON（<code>Content-Type: application/json</code>）</td></tr>
-            <tr><th>鉴权</th><td>管理接口需请求头 <code>Authorization: Bearer &lt;管理Token&gt;</code>；对外接口无需鉴权</td></tr>
+            <tr><th>鉴权</th><td>管理接口需请求头 <code>Authorization: Bearer &lt;管理Token&gt;</code>；对外接口无需管理 Token，但 <code>/api/site-config</code> 需提供卡密 <code>key</code> 与 <code>device_id</code></td></tr>
             <tr><th>时间戳</th><td>响应中的时间均为 Unix 毫秒；公告请求中的时间字段接受 ISO 8601 字符串</td></tr>
             <tr><th>错误约定</th><td>业务失败返回 HTTP 200 + <code>valid:false</code> 或 <code>error</code>；鉴权失败 401，参数错误 400，资源不存在 404</td></tr>
           </tbody>
@@ -780,7 +960,7 @@ export function DocsPage() {
       </section>
 
       <section class="panel">
-        <h2>对外接口 · 无需鉴权</h2>
+        <h2>对外接口 · 无需管理 Token</h2>
         <h3>POST /api/verify — 校验即核销</h3>
         <pre>
 {`请求
@@ -845,6 +1025,39 @@ export function DocsPage() {
 {`# 只获取客户端版本更新公告
 curl "http://localhost:8787/api/announcements?type=client_update"`}
         </pre>
+
+        <h3>GET /api/site-config — 最新站点配置（需卡密校验）</h3>
+        <pre>
+{`请求
+GET /api/site-config?key=CP-XXXX-XXXX-XXXX-XXXX&device_id=device-001
+
+校验通过（HTTP 200）
+{
+   "valid": true,
+   "config": {
+     "id": 1,
+     "title": "客户端配置",
+     "version": "1.2.0",
+     "file_url": "https://example.com/files/1700000000000-uuid.json",
+     "description": "版本更新说明",
+     "created_at": 1794846403225,
+     "updated_at": 1794846403225
+   }
+ }
+
+校验失败（HTTP 200）
+{ "valid": false, "code": "INVALID_KEY", "message": "卡密不存在" }
+
+参数缺失（HTTP 400）
+{ "valid": false, "code": "BAD_REQUEST", "message": "key 与 device_id 必填" }`}
+        </pre>
+        <p class="muted">
+          需提供查询参数 <code>key</code> 与 <code>device_id</code>，校验逻辑与 <code>/api/verify</code>{' '}
+          完全相同（首次校验即激活、同设备刷新活跃时间、新设备检查 <code>max_devices</code> 并绑定，同时写入校验日志）。
+          校验不通过只返回 <code>valid: false</code> 与错误码，不返回 <code>config</code>；校验通过才返回最新一条（按 ID 倒序），
+          未配置时 <code>config</code> 为 <code>null</code>。<code>file_url</code> 由 <code>/files/&lt;key&gt;</code>{' '}
+          代理从 R2 读取，可直接下载；时间均为 Unix 毫秒。
+        </p>
       </section>
 
       <section class="panel">
@@ -872,6 +1085,17 @@ curl "http://localhost:8787/api/announcements?type=client_update"`}
             <tr><td class="mono">POST</td><td class="mono">/api/admin/announcements</td><td class="mono">公告字段，见下</td><td>发布公告</td></tr>
             <tr><td class="mono">PATCH</td><td class="mono">/api/admin/announcements/:id</td><td>任意公告字段</td><td>修改公告</td></tr>
             <tr><td class="mono">DELETE</td><td class="mono">/api/admin/announcements/:id</td><td>—</td><td>删除公告</td></tr>
+          </tbody>
+        </table>
+        <h3>站点配置</h3>
+        <table>
+          <thead><tr><th>方法</th><th>路径</th><th>请求体</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">GET</td><td class="mono">/api/admin/site-configs</td><td>—</td><td>全部配置（最新在前）</td></tr>
+            <tr><td class="mono">POST</td><td class="mono">/api/admin/site-configs</td><td class="mono">{'{ title, version, file_url?, description? }'}</td><td>新增配置</td></tr>
+            <tr><td class="mono">POST</td><td class="mono">/api/admin/site-configs/upload</td><td class="mono">multipart/form-data: file</td><td>上传文件到 R2，返回 file_url（≤10 MB）</td></tr>
+            <tr><td class="mono">PATCH</td><td class="mono">/api/admin/site-configs/:id</td><td>任意配置字段</td><td>修改配置</td></tr>
+            <tr><td class="mono">DELETE</td><td class="mono">/api/admin/site-configs/:id</td><td>—</td><td>删除配置</td></tr>
           </tbody>
         </table>
       </section>
@@ -903,6 +1127,22 @@ curl -X POST http://localhost:8787/api/admin/announcements \\
   -d '{"title":"客户端 v2.1","content":"请升级","type":"client_update",
        "download_url":"https://example.com/app.exe","pinned":true}'`}
         </pre>
+        <pre>
+{`# 上传文件到 R2（返回 file_url）
+curl -X POST http://localhost:8787/api/admin/site-configs/upload \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -F "file=@/path/to/app.json"
+# => { "url": "http://localhost:8787/files/1700000000000-uuid.json" }
+
+# 新增站点配置
+curl -X POST http://localhost:8787/api/admin/site-configs \\
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \\
+  -d '{"title":"客户端配置","version":"1.2.0",
+       "file_url":"http://localhost:8787/files/1700000000000-uuid.json","description":"更新说明"}'
+
+# 对外读取最新配置（无需管理 Token，但需通过卡密校验）
+curl "http://localhost:8787/api/site-config?key=CP-XXXX-XXXX-XXXX-XXXX&device_id=device-001"`}
+        </pre>
       </section>
 
       <section class="panel">
@@ -933,6 +1173,19 @@ curl -X POST http://localhost:8787/api/admin/announcements \\
             <tr><td class="mono">pinned</td><td>0 | 1</td><td>是否置顶</td></tr>
             <tr><td class="mono">starts_at</td><td>number | null</td><td>生效时间，null 表示立即</td></tr>
             <tr><td class="mono">ends_at</td><td>number | null</td><td>失效时间，null 表示长期有效</td></tr>
+          </tbody>
+        </table>
+        <h3>SiteConfig（站点配置）</h3>
+        <table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">id</td><td>number</td><td>主键，对外接口取最大的一条</td></tr>
+            <tr><td class="mono">title</td><td>string</td><td>标题</td></tr>
+            <tr><td class="mono">version</td><td>string</td><td>版本号</td></tr>
+            <tr><td class="mono">file_url</td><td>string | null</td><td>文件地址，上传到 R2 后由 <code>/files/&lt;key&gt;</code> 代理返回</td></tr>
+            <tr><td class="mono">description</td><td>string</td><td>描述</td></tr>
+            <tr><td class="mono">created_at</td><td>number</td><td>创建时间（Unix 毫秒）</td></tr>
+            <tr><td class="mono">updated_at</td><td>number</td><td>更新时间（Unix 毫秒）</td></tr>
           </tbody>
         </table>
       </section>

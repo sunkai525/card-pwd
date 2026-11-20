@@ -5,6 +5,7 @@ import type {
   CardKey,
   CardStatus,
   DeviceBinding,
+  SiteConfig,
   Stats,
   VerifyLog,
 } from './types'
@@ -338,4 +339,60 @@ export async function updateAnnouncement(
 
 export async function deleteAnnouncement(db: DB, id: number): Promise<void> {
   await db.prepare('DELETE FROM announcements WHERE id = ?').bind(id).run()
+}
+
+// ---------------------------------------------------------------------------
+// 站点配置
+// ---------------------------------------------------------------------------
+export interface SiteConfigInput {
+  title: string
+  version: string
+  file_url: string | null
+  description: string
+}
+
+/** 管理端：全部站点配置，最新的在前 */
+export async function listAllSiteConfigs(db: DB): Promise<SiteConfig[]> {
+  const result = await db.prepare('SELECT * FROM site_configs ORDER BY id DESC').all<SiteConfig>()
+  return result.results as SiteConfig[]
+}
+
+/** 对外：最新一条站点配置，无数据时返回 null */
+export async function getLatestSiteConfig(db: DB): Promise<SiteConfig | null> {
+  return (await db.prepare('SELECT * FROM site_configs ORDER BY id DESC LIMIT 1').first<SiteConfig>()) ?? null
+}
+
+export async function getSiteConfigById(db: DB, id: number): Promise<SiteConfig | null> {
+  return (await db.prepare('SELECT * FROM site_configs WHERE id = ?').bind(id).first<SiteConfig>()) ?? null
+}
+
+export async function insertSiteConfig(db: DB, input: SiteConfigInput): Promise<SiteConfig | null> {
+  const t = Date.now()
+  const info = await db
+    .prepare(
+      `INSERT INTO site_configs (title, version, file_url, description, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(input.title, input.version, input.file_url, input.description, t, t)
+    .run()
+  return getSiteConfigById(db, info.meta.last_row_id)
+}
+
+export async function updateSiteConfig(db: DB, id: number, input: Partial<SiteConfigInput>): Promise<void> {
+  const sets: string[] = []
+  const params: (string | number | null)[] = []
+  for (const field of ['title', 'version', 'file_url', 'description'] as const) {
+    if (input[field] !== undefined) {
+      sets.push(`${field} = ?`)
+      params.push(input[field])
+    }
+  }
+  if (sets.length === 0) return
+  sets.push('updated_at = ?')
+  params.push(Date.now(), id)
+  await db.prepare(`UPDATE site_configs SET ${sets.join(', ')} WHERE id = ?`).bind(...params).run()
+}
+
+export async function deleteSiteConfig(db: DB, id: number): Promise<void> {
+  await db.prepare('DELETE FROM site_configs WHERE id = ?').bind(id).run()
 }

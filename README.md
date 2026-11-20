@@ -6,6 +6,7 @@
 - 对外校验接口：`POST /api/verify`，**校验即核销**（首次校验激活并开始计算有效期）
 - 管理端：API Token 鉴权的 REST API + SSR 管理页面（列表、新增/批量生成/导入、编辑、禁用、解绑、删除、统计）
 - 公告：对外公开 API 与展示页，管理端支持置顶、定时生效与失效
+- 站点配置：标题 / 版本号 / 文件地址 / 描述，文件上传到 R2；对外接口需通过卡密校验，通过后返回最新一条
 
 ## 本地开发
 
@@ -25,6 +26,8 @@ npm run dev
 
 打开 http://localhost:8787 ，在登录页输入 `.dev.vars` 中的 `ADMIN_TOKEN`。
 
+> `wrangler.jsonc` 中声明了 R2 绑定 `FILES`（bucket 名 `card-pwd-files`）。本地 Miniflare 会自动创建该 bucket，无需额外操作。
+
 > `wrangler.jsonc` 中的 `database_id` 当前为占位值，仅本地开发使用；部署前需替换为你自己的 D1 数据库 ID。`compatibility_date` 固定为本地运行时支持的 `2026-11-10`。
 
 ## 部署到 Cloudflare
@@ -38,10 +41,13 @@ npx wrangler d1 create card-pwd-db
 # 2. 执行远程迁移
 npx wrangler d1 migrations apply card-pwd-db --remote
 
-# 3. 设置管理 Token（Secret）
+# 3. 创建 R2 bucket（名称需与 wrangler.jsonc 中 bucket_name 一致）
+npx wrangler r2 bucket create card-pwd-files
+
+# 4. 设置管理 Token（Secret）
 npx wrangler secret put ADMIN_TOKEN
 
-# 4. 部署
+# 5. 部署
 npm run deploy
 ```
 
@@ -59,6 +65,7 @@ npm run cf-typegen
 | `device_bindings` | 设备绑定：`(card_id, device_id)` 唯一，记录绑定与最近活跃时间 |
 | `verify_logs` | 校验日志：记录每次校验的卡密、设备与结果 |
 | `announcements` | 公告：`title`、`content`、`type`（公告类型）、`download_url`、`pinned`、`starts_at`、`ends_at` |
+| `site_configs` | 站点配置：`title`、`version`、`file_url`（R2 文件地址）、`description` |
 
 状态流转：`unused`（未激活）→ `active`（使用中）→ `expired`（已过期）；`disabled`（禁用）可随时切换。
 
@@ -108,6 +115,28 @@ npm run cf-typegen
 ] }
 ```
 
+#### GET /api/site-config — 最新站点配置（需卡密校验）
+
+无需管理 Token，但必须通过卡密校验。查询参数 `key` 与 `device_id` 必填，校验逻辑与 `POST /api/verify` 完全相同（首次校验即激活、同设备刷新活跃时间、新设备检查 `max_devices` 并绑定，并写入校验日志）。校验通过后返回最新一条（按 ID 倒序）；尚未配置时 `config` 为 `null`。`file_url` 由上传接口写入，可通过 `GET /files/<key>`（无需鉴权）下载。
+
+```text
+GET /api/site-config?key=CP-XXXX-XXXX-XXXX-XXXX&device_id=device-001
+
+// 校验通过（HTTP 200）
+{ "valid": true, "config": {
+  "id": 1, "title": "客户端配置", "version": "1.2.0",
+  "file_url": "http://localhost:8787/files/1700000000000-uuid.json",
+  "description": "版本更新说明",
+  "created_at": 1794846403225, "updated_at": 1794846403225
+} }
+
+// 校验失败（HTTP 200，不返回 config）
+{ "valid": false, "code": "DEVICE_LIMIT", "message": "绑定设备数已达上限" }
+
+// 参数缺失（HTTP 400）
+{ "valid": false, "code": "BAD_REQUEST", "message": "key 与 device_id 必填" }
+```
+
 ### 管理接口（需 Bearer Token）
 
 | 方法 | 路径 | 请求体 / 参数 | 响应 |
@@ -125,6 +154,11 @@ npm run cf-typegen
 | POST | `/api/admin/announcements` | 公告字段（见下） | 201 `{ announcement }` |
 | PATCH | `/api/admin/announcements/:id` | 任意公告字段 | `{ announcement }` |
 | DELETE | `/api/admin/announcements/:id` | — | `{ deleted: id }` |
+| GET | `/api/admin/site-configs` | — | `{ items }`，全部站点配置（最新在前） |
+| POST | `/api/admin/site-configs` | 配置字段（见下） | 201 `{ config }` |
+| POST | `/api/admin/site-configs/upload` | `multipart/form-data`：`file` | 201 `{ url }`，上传文件到 R2（≤10 MB），返回可被 `/files/<key>` 代理的地址 |
+| PATCH | `/api/admin/site-configs/:id` | 任意配置字段 | `{ config }` |
+| DELETE | `/api/admin/site-configs/:id` | — | `{ deleted: id }` |
 
 公告字段：
 
@@ -138,7 +172,16 @@ npm run cf-typegen
 | `starts_at` | string \| null | 生效时间（ISO 8601），null = 立即 |
 | `ends_at` | string \| null | 失效时间（ISO 8601），null = 长期有效；须晚于 `starts_at` |
 
-`CardKey` 字段：`id`、`key`、`valid_days`、`max_devices`、`status`、`note`、`activated_at`、`expires_at`、`created_at`、`updated_at`。
+站点配置字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `title` | string | 必填，≤200 字符 |
+| `version` | string | 必填，≤100 字符 |
+| `file_url` | string \| null | 文件地址，仅接受 http/https；由上传接口返回或手工填写 |
+| `description` | string | 描述 |
+
+`CardKey` 字段：`id`、`key`、`valid_days`、`max_devices`、`status`、`note`、`activated_at`、`expires_at`、`created_at`、`updated_at`。`SiteConfig` 字段：`id`、`title`、`version`、`file_url`、`description`、`created_at`、`updated_at`。
 
 ### 错误响应
 
@@ -176,6 +219,18 @@ curl -X POST http://localhost:8787/api/admin/announcements \
 
 # 按类型拉取当前生效公告（无需鉴权）
 curl "http://localhost:8787/api/announcements?type=client_update"
+
+# 上传文件到 R2（返回 file_url）
+curl -X POST http://localhost:8787/api/admin/site-configs/upload \
+  -H "Authorization: Bearer $TOKEN" -F "file=@/path/to/app.json"
+
+# 新增站点配置（file_url 使用上一步返回的 url）
+curl -X POST http://localhost:8787/api/admin/site-configs \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"title":"客户端配置","version":"1.2.0","file_url":"http://localhost:8787/files/1700000000000-uuid.json","description":"更新说明"}'
+
+# 对外读取最新站点配置（无需管理 Token，但需通过卡密校验）
+curl "http://localhost:8787/api/site-config?key=CP-XXXX-XXXX-XXXX-XXXX&device_id=device-001"
 ```
 
 ## 管理页面
@@ -193,6 +248,14 @@ curl "http://localhost:8787/api/announcements?type=client_update"
 | `/admin/announcements/new` | 发布公告 |
 | `/admin/announcements/:id/edit` | 编辑公告 |
 | `/admin/announcements/:id/delete` | 删除确认（二次确认后执行） |
+| `/admin/site-configs` | 站点配置列表（后台导航「站点配置」入口） |
+| `/admin/site-configs/new` | 新增配置（选择文件自动上传到 R2 并填入文件地址） |
+| `/admin/site-configs/:id/edit` | 编辑配置 |
+| `/admin/site-configs/:id/delete` | 删除确认（二次确认后执行） |
+
+## 站点配置
+
+站点配置用于向客户端下发最新配置（标题、版本号、文件地址、描述）。在后台「站点配置」中新增/编辑，选择文件时会上传到 R2 并把返回的 `/files/<key>` 地址写入「文件地址」；该地址由 Worker 代理从 R2 读取，无需配置公共域名。客户端携带 `key` 与 `device_id` 调用 `GET /api/site-config`，通过卡密校验后才返回最新一条配置（按 ID 倒序），无数据时返回 `{ "config": null }`；校验失败返回 `valid: false` 与错误码，不包含 `config`。
 
 ## 公告展示
 

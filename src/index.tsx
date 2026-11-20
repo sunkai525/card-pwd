@@ -129,6 +129,67 @@ function parseAnnouncementForm(form: Record<string, string>): store.Announcement
   }
 }
 
+type SiteConfigFields = Partial<store.SiteConfigInput>
+
+function parseSiteConfigBody(body: Body, requireAll: boolean): { fields: SiteConfigFields; error?: string } {
+  const fields: SiteConfigFields = {}
+  if (requireAll || body.title !== undefined) {
+    if (!isNonEmptyString(body.title, 200)) return { fields, error: 'title 无效' }
+    fields.title = (body.title as string).trim()
+  }
+  if (requireAll || body.version !== undefined) {
+    if (!isNonEmptyString(body.version, 100)) return { fields, error: 'version 无效' }
+    fields.version = (body.version as string).trim()
+  }
+  if (body.description !== undefined) {
+    if (typeof body.description !== 'string' || body.description.length > 100000) {
+      return { fields, error: 'description 无效' }
+    }
+    fields.description = body.description.trim()
+  } else if (requireAll) {
+    fields.description = ''
+  }
+  if (body.file_url !== undefined) {
+    const url = parseDownloadUrl(body.file_url)
+    if (url === 'invalid') return { fields, error: 'file_url 必须为有效的 http/https 地址' }
+    fields.file_url = url
+  } else if (requireAll) {
+    fields.file_url = null
+  }
+  return { fields }
+}
+
+function parseSiteConfigForm(form: Record<string, string>): store.SiteConfigInput | null {
+  const title = form.title?.trim()
+  const version = form.version?.trim()
+  if (!title || title.length > 200 || !version || version.length > 100) return null
+  const description = form.description?.trim() ?? ''
+  if (description.length > 100000) return null
+  const file_url = parseDownloadUrl(form.file_url)
+  if (file_url === 'invalid') return null
+  return { title, version, file_url, description }
+}
+
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+function readUploadedFile(form: FormData): { file?: File; error?: string } {
+  const file = form.get('file')
+  if (!file || typeof file === 'string' || typeof file.arrayBuffer !== 'function') return { error: '缺少文件' }
+  if (file.size === 0) return { error: '文件不能为空' }
+  if (file.size > MAX_UPLOAD_BYTES) return { error: '文件不能超过 10 MB' }
+  return { file }
+}
+
+/** 上传到 R2 并返回可由 /files/<key> 代理访问的绝对地址 */
+async function uploadR2File(c: Context<AppEnv>, file: File): Promise<string> {
+  const ext = /\.[a-zA-Z0-9]{1,10}$/.exec(file.name)?.[0] ?? ''
+  const key = `${Date.now()}-${crypto.randomUUID()}${ext}`
+  await c.env.FILES.put(key, await file.arrayBuffer(), {
+    httpMetadata: { contentType: file.type || 'application/octet-stream' },
+  })
+  return new URL(`/files/${encodeURIComponent(key)}`, c.req.url).toString()
+}
+
 async function readFormIds(c: Context<AppEnv>): Promise<number[]> {
   // all: true —— 同名复选框/隐藏字段需要保留为数组，否则只取到最后一个
   const body = await c.req.parseBody({ all: true })
@@ -154,6 +215,34 @@ app.get('/api/announcements', async (c) => {
   // 非法 type 视为不过滤，与 /api/admin/keys 的 status 参数行为一致
   const type = parseAnnouncementType(c.req.query('type')) ?? undefined
   return c.json({ items: await store.listPublicAnnouncements(c.env.DB, 50, type) })
+})
+
+// 对外站点配置 API（无需管理 Token，但需通过卡密校验；校验通过后返回最新一条）
+app.get('/api/site-config', async (c) => {
+  const key = c.req.query('key')
+  const deviceId = c.req.query('device_id')
+  if (!isNonEmptyString(key, 256) || !isNonEmptyString(deviceId, 128)) {
+    return c.json({ valid: false, code: 'BAD_REQUEST', message: 'key 与 device_id 必填' }, 400)
+  }
+  const result = await verifyCard(c.env.DB, key.trim(), deviceId.trim())
+  if (!result.valid) return c.json(result)
+  return c.json({ valid: true, config: await store.getLatestSiteConfig(c.env.DB) })
+})
+
+// R2 文件代理：上传接口返回的文件地址指向这里
+app.get('/files/:key', async (c) => {
+  let key = c.req.param('key')
+  try {
+    key = decodeURIComponent(key)
+  } catch {
+    // 原样使用
+  }
+  const object = await c.env.FILES.get(key)
+  if (!object) return c.notFound()
+  const headers = new Headers()
+  object.writeHttpMetadata(headers)
+  headers.set('etag', object.httpEtag)
+  return new Response(object.body, { headers })
 })
 
 // ---------------------------------------------------------------------------
@@ -200,6 +289,43 @@ app.delete('/api/admin/announcements/:id', async (c) => {
   const id = Number(c.req.param('id'))
   if (!(await store.getAnnouncementById(c.env.DB, id))) return c.json({ error: 'NOT_FOUND' }, 404)
   await store.deleteAnnouncement(c.env.DB, id)
+  return c.json({ deleted: id })
+})
+
+// --- 站点配置管理 API ---
+app.get('/api/admin/site-configs', async (c) => {
+  return c.json({ items: await store.listAllSiteConfigs(c.env.DB) })
+})
+
+app.post('/api/admin/site-configs', async (c) => {
+  const body = await readJson(c)
+  if (!body) return c.json({ error: 'BAD_REQUEST' }, 400)
+  const { fields, error } = parseSiteConfigBody(body, true)
+  if (error) return c.json({ error: 'BAD_REQUEST', message: error }, 400)
+  return c.json({ config: await store.insertSiteConfig(c.env.DB, fields as store.SiteConfigInput) }, 201)
+})
+
+app.post('/api/admin/site-configs/upload', async (c) => {
+  const { file, error } = readUploadedFile(await c.req.formData())
+  if (error || !file) return c.json({ error: 'BAD_REQUEST', message: error ?? '缺少文件' }, 400)
+  return c.json({ url: await uploadR2File(c, file) }, 201)
+})
+
+app.patch('/api/admin/site-configs/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!(await store.getSiteConfigById(c.env.DB, id))) return c.json({ error: 'NOT_FOUND' }, 404)
+  const body = await readJson(c)
+  if (!body) return c.json({ error: 'BAD_REQUEST' }, 400)
+  const { fields, error } = parseSiteConfigBody(body, false)
+  if (error) return c.json({ error: 'BAD_REQUEST', message: error }, 400)
+  await store.updateSiteConfig(c.env.DB, id, fields)
+  return c.json({ config: await store.getSiteConfigById(c.env.DB, id) })
+})
+
+app.delete('/api/admin/site-configs/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!(await store.getSiteConfigById(c.env.DB, id))) return c.json({ error: 'NOT_FOUND' }, 404)
+  await store.deleteSiteConfig(c.env.DB, id)
   return c.json({ deleted: id })
 })
 
@@ -502,6 +628,16 @@ app.post('/keys/:id/edit', pageAuth, async (c) => {
   return c.redirect(`/keys/${id}`)
 })
 
+app.post('/keys/:id/note', pageAuth, async (c) => {
+  const id = Number(c.req.param('id'))
+  const card = await store.getCardById(c.env.DB, id)
+  if (!card) return c.notFound()
+  const form = await readForm(c)
+  await store.updateCard(c.env.DB, id, { note: form.note?.trim() || null })
+  const next = safeNext(form.next)
+  return c.redirect(next === '/' ? '/keys' : next)
+})
+
 app.post('/keys/:id/status', pageAuth, async (c) => {
   const id = Number(c.req.param('id'))
   const card = await store.getCardById(c.env.DB, id)
@@ -599,6 +735,64 @@ app.get('/admin/announcements/:id/delete', pageAuth, async (c) => {
 app.post('/admin/announcements/:id/delete', pageAuth, async (c) => {
   await store.deleteAnnouncement(c.env.DB, Number(c.req.param('id')))
   return c.redirect('/admin/announcements')
+})
+
+// ---------------------------------------------------------------------------
+// 站点配置页面
+// ---------------------------------------------------------------------------
+app.get('/admin/site-configs', pageAuth, async (c) => {
+  return c.render(<pages.SiteConfigsPage items={await store.listAllSiteConfigs(c.env.DB)} />)
+})
+
+app.get('/admin/site-configs/new', pageAuth, (c) => {
+  return c.render(<pages.SiteConfigFormPage />)
+})
+
+app.post('/admin/site-configs/new', pageAuth, async (c) => {
+  const input = parseSiteConfigForm(await readForm(c))
+  if (!input) {
+    return c.render(<pages.SiteConfigFormPage error="请检查标题、版本号、文件地址与描述" />)
+  }
+  await store.insertSiteConfig(c.env.DB, input)
+  return c.redirect('/admin/site-configs')
+})
+
+// 表单中的文件上传走 Cookie 鉴权，上传成功后返回可填回表单的 R2 文件地址
+app.post('/admin/site-configs/upload', pageAuth, async (c) => {
+  const { file, error } = readUploadedFile(await c.req.formData())
+  if (error || !file) return c.json({ error: 'BAD_REQUEST', message: error ?? '缺少文件' }, 400)
+  return c.json({ url: await uploadR2File(c, file) })
+})
+
+app.get('/admin/site-configs/:id/edit', pageAuth, async (c) => {
+  const id = Number(c.req.param('id'))
+  const config = await store.getSiteConfigById(c.env.DB, id)
+  if (!config) return c.notFound()
+  return c.render(<pages.SiteConfigFormPage config={config} />)
+})
+
+app.post('/admin/site-configs/:id/edit', pageAuth, async (c) => {
+  const id = Number(c.req.param('id'))
+  const config = await store.getSiteConfigById(c.env.DB, id)
+  if (!config) return c.notFound()
+  const input = parseSiteConfigForm(await readForm(c))
+  if (!input) {
+    return c.render(<pages.SiteConfigFormPage config={config} error="请检查标题、版本号、文件地址与描述" />)
+  }
+  await store.updateSiteConfig(c.env.DB, id, input)
+  return c.redirect('/admin/site-configs')
+})
+
+app.get('/admin/site-configs/:id/delete', pageAuth, async (c) => {
+  const id = Number(c.req.param('id'))
+  const config = await store.getSiteConfigById(c.env.DB, id)
+  if (!config) return c.notFound()
+  return c.render(<pages.SiteConfigDeleteConfirmPage config={config} />)
+})
+
+app.post('/admin/site-configs/:id/delete', pageAuth, async (c) => {
+  await store.deleteSiteConfig(c.env.DB, Number(c.req.param('id')))
+  return c.redirect('/admin/site-configs')
 })
 
 app.get('/docs', pageAuth, (c) => {

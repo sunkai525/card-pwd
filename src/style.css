@@ -304,6 +304,20 @@ button.danger:hover,
 .inline {
   display: inline;
 }
+.note-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.note-input {
+  width: 140px;
+  padding: 5px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  background: #fff;
+}
 
 .actions {
   display: flex;
